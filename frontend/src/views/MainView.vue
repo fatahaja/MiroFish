@@ -112,7 +112,6 @@ const systemLogs = ref([])
 
 // Polling timers
 let pollTimer = null
-let graphPollTimer = null
 
 // --- Computed Layout Styles ---
 const leftPanelStyle = computed(() => {
@@ -246,7 +245,6 @@ const loadProject = async () => {
       } else if (res.data.status === 'graph_building' && res.data.graph_build_task_id) {
         currentPhase.value = 1
         startPollingTask(res.data.graph_build_task_id)
-        startGraphPolling()
       } else if (res.data.status === 'graph_completed' && res.data.graph_id) {
         currentPhase.value = 2
         await loadGraph(res.data.graph_id)
@@ -282,7 +280,6 @@ const startBuildGraph = async () => {
     const res = await buildGraph({ project_id: currentProjectId.value })
     if (res.success) {
       addLog(`Graph build task started. Task ID: ${res.data.task_id}`)
-      startGraphPolling()
       startPollingTask(res.data.task_id)
     } else {
       error.value = res.error
@@ -294,33 +291,10 @@ const startBuildGraph = async () => {
   }
 }
 
-const startGraphPolling = () => {
-  addLog('Started polling for graph data...')
-  fetchGraphData()
-  graphPollTimer = setInterval(fetchGraphData, 10000)
-}
-
-const fetchGraphData = async () => {
-  try {
-    // Refresh project info to check for graph_id
-    const projRes = await getProject(currentProjectId.value)
-    if (projRes.success && projRes.data.graph_id) {
-      const gRes = await getGraphData(projRes.data.graph_id)
-      if (gRes.success) {
-        graphData.value = gRes.data
-        const nodeCount = gRes.data.node_count || gRes.data.nodes?.length || 0
-        const edgeCount = gRes.data.edge_count || gRes.data.edges?.length || 0
-        addLog(`Graph data refreshed. Nodes: ${nodeCount}, Edges: ${edgeCount}`)
-      }
-    }
-  } catch (err) {
-    console.warn('Graph fetch error:', err)
-  }
-}
-
 const startPollingTask = (taskId) => {
   pollTaskStatus(taskId)
-  pollTimer = setInterval(() => pollTaskStatus(taskId), 2000)
+  // Free-tier friendly polling interval to reduce API pressure.
+  pollTimer = setInterval(() => pollTaskStatus(taskId), 5000)
 }
 
 const pollTaskStatus = async (taskId) => {
@@ -339,7 +313,6 @@ const pollTaskStatus = async (taskId) => {
       if (task.status === 'completed') {
         addLog('Graph build task completed.')
         stopPolling()
-        stopGraphPolling() // Stop polling, do final load
         currentPhase.value = 2
         
         // Final load
@@ -391,21 +364,12 @@ const stopPolling = () => {
   }
 }
 
-const stopGraphPolling = () => {
-  if (graphPollTimer) {
-    clearInterval(graphPollTimer)
-    graphPollTimer = null
-    addLog('Graph polling stopped.')
-  }
-}
-
 onMounted(() => {
   initProject()
 })
 
 onUnmounted(() => {
   stopPolling()
-  stopGraphPolling()
 })
 </script>
 

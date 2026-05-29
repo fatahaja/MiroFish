@@ -4,6 +4,7 @@
 """
 
 import os
+import time
 import traceback
 import threading
 from flask import request, jsonify
@@ -21,6 +22,12 @@ from ..models.project import ProjectManager, ProjectStatus
 
 # 获取日志器
 logger = get_logger('mirofish.api')
+
+
+# Small in-memory cache for expensive graph-data reads.
+_GRAPH_DATA_CACHE: dict[str, dict] = {}
+_GRAPH_DATA_CACHE_LOCK = threading.Lock()
+_GRAPH_DATA_CACHE_TTL_SECONDS = 60
 
 
 def allowed_file(filename: str) -> bool:
@@ -577,9 +584,24 @@ def get_graph_data(graph_id: str):
                 "success": False,
                 "error": t('api.zepApiKeyMissing')
             }), 500
+
+        now = time.time()
+        with _GRAPH_DATA_CACHE_LOCK:
+            cached = _GRAPH_DATA_CACHE.get(graph_id)
+            if cached and (now - cached.get("ts", 0)) < _GRAPH_DATA_CACHE_TTL_SECONDS:
+                return jsonify({
+                    "success": True,
+                    "data": cached["data"]
+                })
         
         builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
         graph_data = builder.get_graph_data(graph_id)
+
+        with _GRAPH_DATA_CACHE_LOCK:
+            _GRAPH_DATA_CACHE[graph_id] = {
+                "ts": now,
+                "data": graph_data
+            }
         
         return jsonify({
             "success": True,
@@ -608,6 +630,9 @@ def delete_graph(graph_id: str):
         
         builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
         builder.delete_graph(graph_id)
+
+        with _GRAPH_DATA_CACHE_LOCK:
+            _GRAPH_DATA_CACHE.pop(graph_id, None)
         
         return jsonify({
             "success": True,
